@@ -1,0 +1,73 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          {
+            node-version: 'lts/*'
+        }
+
+      - name: Build React App
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Copy Build to EC2
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.FRONTEND_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "frontend/build/*"
+          target: "/tmp/react-build"
+          strip_components: 2
+
+      - name: Copy Apache Config
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.FRONTEND_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "frontend/apache.conf"
+          target: "/tmp/apache.conf"
+
+      - name: Deploy to Apache directory
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.FRONTEND_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 15m
+          script: |
+            # 1. Clear old files
+            sudo rm -rf /var/www/html/*
+            
+            # 2. Move new React build files to Apache root
+            sudo mv /tmp/react-build/* /var/www/html/
+            
+            # 3. Configure Apache (Move config file)
+            sudo mv /tmp/apache.conf /etc/apache2/sites-available/000-default.conf
+            
+            # 4. Replace Backend IP placeholder
+            sudo sed -i "s/BACKEND_PRIVATE_IP/${{ secrets.BACKEND_PRIVATE_IP }}/g" /etc/apache2/sites-available/000-default.conf
+            
+            # 5. Restart Apache
+            sudo systemctl restart apache2
+            
+            echo "Frontend deployed using frontend/apache.conf!"
